@@ -1,0 +1,224 @@
+blueprint:
+  name: 📬 Smart mailbox (Contact Sensor)
+  description: >
+    # 📬 Smart mailbox using a contact (opening) sensor, this is a fork by 0xAmit to the original blueprint by eroak
+    
+    This Blueprint detects mail deposits and collections in your mailbox using a **contact sensor**,
+    confirmation entities, and optional counters or datetime entities.
+    
+    ## ✨ Key features
+     - Use a **mail counter** ([Create a counter](https://my.home-assistant.io/redirect/config_flow_start?domain=counter)) to track the number of mails in the mailbox.
+     - Record the **date and time** ([Create an input_datetime](https://my.home-assistant.io/redirect/config_flow_start?domain=input_datetime)) of the last mail deposit and collection.
+     - Trigger **custom actions** for deposits or collections.
+
+    ## 🎬 How it works
+    
+    1. **Trigger**: The blueprint triggers when the mailbox contact sensor goes from `off` (closed) to `on` (opened).
+    2. **Timeout**: It waits the configured number of seconds (`timeout_in_seconds`).
+    3. **Check**: If none of the specified “collection confirming” entities have changed state (within the timeout), it’s considered a **mail deposit**; otherwise, it’s a **mail collection**.
+    
+  domain: automation
+  author: Eroak (modified for contact sensors by 0xAmit)
+  homeassistant:
+    min_version: 2024.6.0
+    
+  input:
+    detection:
+      name: Detection configuration*
+      icon: mdi:eye-check
+      input:
+        mailbox_sensor:
+          name: 📬 Mailbox contact sensor
+          description: The contact sensor on the mailbox (detects open/close).
+          selector:
+            entity:
+              filter:
+                domain: binary_sensor
+                device_class:
+                  - opening
+
+    collection:
+      name: Collection detection settings*
+      description: >
+        Configure which entities and within what timeframe confirm that it is a collection 
+        (not a deposit).
+      icon: mdi:call-split
+      input:
+        timeout_in_seconds:
+          name: ⏲️ Timeout delay
+          description: >
+            The delay (in seconds) after the mailbox sensor triggers, before deciding 
+            if it was a deposit or a collection.
+          default: 45
+          selector:
+            number:
+              min: 0
+              max: 120
+              step: 5
+              unit_of_measurement: "seconds"
+              mode: slider
+        
+        collection_confirming_entities:
+          name: ⏻ Entities confirming collection
+          description: >
+            List of entities (e.g., contact sensors or switches) that, if triggered during 
+            the timeout, indicate a mail collection.
+          selector:
+            entity:
+              multiple: true
+              filter:
+                domain:
+                  - binary_sensor
+                  - switch
+                device_class:
+                  - door
+                  - window
+                  - opening
+
+    indicators:
+      name: Counter and datetimes indicators (optional)
+      icon: mdi:clipboard-text-clock-outline
+      collapsed: true
+      description: >
+        Track the mail count and log last deposit or collection times.
+            
+      input:
+        mailbox_counter:
+          name: 🔢 Mail counter (optional)
+          description: >
+            A counter entity to track the number of mails in the mailbox.
+          default: ""
+          selector:
+            entity:
+              domain: counter
+        
+        last_deposit_input_datetime:
+          name: 📅 Last deposit datetime (optional)
+          description: >
+            An entity to store the date/time of the last mail deposit.
+          default: ""
+          selector:
+            entity:
+              domain: input_datetime
+        
+        last_collect_input_datetime:
+          name: 📅 Last collection datetime (optional)
+          description: >
+            An entity to store the date/time of the last mail collection.
+          default: ""
+          selector:
+            entity:
+              domain: input_datetime
+
+    actions:
+      name: Custom actions (optional)
+      description: >
+        Actions executed after the timeout once the blueprint determines deposit or collection.
+      icon: mdi:checkbox-marked-circle-auto-outline
+      collapsed: true
+      input:
+        actions_in:
+          name: 📬 Actions after mail deposit (optional)
+          description: >
+            Actions to execute after a mail deposit is detected.
+          default: []
+          selector:
+            action: {}
+        
+        actions_out:
+          name: 📭 Actions after mail collection (optional)
+          description: >
+            Actions to execute after a mail collection is detected.
+          default: []
+          selector:
+            action: {}
+
+mode: single
+
+trigger:
+  - platform: state
+    entity_id: !input mailbox_sensor
+    from: "off"
+    to: "on"
+
+variables:
+  scriptTriggeredAt: "{{ as_timestamp(now()) }}"
+  timeoutInSeconds: !input timeout_in_seconds
+  collectionConfirmingEntities: !input collection_confirming_entities
+  mailboxCounter: !input mailbox_counter
+  lastDepositInputDatetime: !input last_deposit_input_datetime
+  lastCollectInputDatetime: !input last_collect_input_datetime
+  actionsIn: !input actions_in
+  actionsOut: !input actions_out
+
+action:
+  - alias: "Wait before determining if it's a deposit or collection"
+    delay: "{{ timeoutInSeconds }}"
+
+  - if:
+      - alias: "Check if no collection entities triggered within timeout"
+        condition: template
+        value_template: >-
+          {% set result = namespace(allDurationsExceedTimeout = true) %}
+          {% for sensor in collectionConfirmingEntities %}
+              {% if result.allDurationsExceedTimeout %}
+                  {% set delta = (scriptTriggeredAt - as_timestamp(states[sensor].last_changed)) | round | abs %}
+                  {% set result.allDurationsExceedTimeout = (delta > timeoutInSeconds) %}
+              {% endif %}
+          {% endfor %}
+          {{ result.allDurationsExceedTimeout }}
+    then:
+      - alias: "Mail deposited"
+        parallel:
+          - alias: "Increment mail counter if set"
+            choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ mailboxCounter != '' }}"
+                sequence:
+                  - service: counter.increment
+                    target:
+                      entity_id: "{{ mailboxCounter }}"
+
+          - alias: "Set last deposit datetime if set"
+            choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ lastDepositInputDatetime != '' }}"
+                sequence:
+                  - service: input_datetime.set_datetime
+                    target:
+                      entity_id: "{{ lastDepositInputDatetime }}"
+                    data:
+                      timestamp: "{{ scriptTriggeredAt }}"
+
+          - alias: "Trigger actions for deposit"
+            sequence: !input actions_in
+
+    else:
+      - alias: "Mail collected"
+        parallel:
+          - alias: "Reset mail counter if set"
+            choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ mailboxCounter != '' }}"
+                sequence:
+                  - service: counter.reset
+                    target:
+                      entity_id: "{{ mailboxCounter }}"
+
+          - alias: "Set last collection datetime if set"
+            choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ lastCollectInputDatetime != '' }}"
+                sequence:
+                  - service: input_datetime.set_datetime
+                    target:
+                      entity_id: "{{ lastCollectInputDatetime }}"
+                    data:
+                      timestamp: "{{ scriptTriggeredAt }}"
+
+          - alias: "Trigger actions for collection"
+            sequence: !input actions_out
