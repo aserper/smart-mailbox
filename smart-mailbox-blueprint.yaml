@@ -7,7 +7,7 @@ blueprint:
     confirmation entities, and optional counters or datetime entities.
 
   domain: automation
-  author: "Eroak (modified by @0xAmit for contact sensors and flexible notifications)"
+  author: "Eroak (modified by 0xAmit)"
   homeassistant:
     min_version: 2024.6.0
 
@@ -35,9 +35,6 @@ blueprint:
       input:
         timeout_in_seconds:
           name: "⏲️ Timeout delay"
-          description: >
-            The delay (in seconds) after the mailbox sensor triggers, before determining 
-            if it was a deposit or a collection.
           default: 45
           selector:
             number:
@@ -49,9 +46,6 @@ blueprint:
         
         collection_confirming_entities:
           name: "⏻ Entities confirming collection"
-          description: >
-            List of entities (e.g., other contact sensors or switches) that, if triggered 
-            within the timeout, indicate a mail collection.
           selector:
             entity:
               multiple: true
@@ -67,24 +61,15 @@ blueprint:
     notifications:
       name: "Notification settings"
       icon: mdi:bell-outline
-      description: "Configure notification settings for mail deposit and collection alerts."
       input:
         notify_service:
           name: "Notification service"
-          description: >
-            The notification service to use.  
-            - Use `"notify.notify"` for standard notifications (requires a target).  
-            - Use `"notify.family_mobile_app"` for a group notification.  
-            - Use `"notify.mobile_app_<your_device>"` for a specific device.
           default: "notify.notify"
           selector:
             text:
 
         notify_target:
           name: "Notification target (optional)"
-          description: >
-            The notification target for `"notify.notify"`, such as `"family_mobile_app"` or an individual phone.
-            Leave empty if using a custom notification service.
           default: ""
           selector:
             text:
@@ -93,21 +78,15 @@ blueprint:
       name: "Custom actions (optional)"
       icon: mdi:checkbox-marked-circle-auto-outline
       collapsed: true
-      description: >
-        Actions that run after the timeout once it’s determined to be deposit or collection.
       input:
         actions_in:
           name: "📬 Actions after mail deposit (optional)"
-          description: >
-            Actions executed after a mail deposit is detected.
           default: []
           selector:
             action: {}
         
         actions_out:
           name: "📭 Actions after mail collection (optional)"
-          description: >
-            Actions executed after a mail collection is detected.
           default: []
           selector:
             action: {}
@@ -149,13 +128,24 @@ action:
       - alias: "Mail deposited"
         parallel:
           - alias: "Trigger notification for deposit"
-            service: "{{ notifyService }}"
-            data:
-              message: "📮You've got mail! 📮"
-              title: "📬 Mailbox alert!"
-              {% if notifyService == "notify.notify" and notifyTarget != "" %}
-              target: "{{ notifyTarget }}"
-              {% endif %}
+            choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ notifyService == 'notify.notify' and notifyTarget != '' }}"
+                sequence:
+                  - service: notify.notify
+                    data:
+                      message: "📮You've got mail! 📮"
+                      title: "📬 Mailbox alert!"
+                      target: "{{ notifyTarget }}"
+              - conditions:
+                  - condition: template
+                    value_template: "{{ notifyService != 'notify.notify' }}"
+                sequence:
+                  - service: "{{ notifyService }}"
+                    data:
+                      message: "📮You've got mail! 📮"
+                      title: "📬 Mailbox alert!"
 
           - alias: "Trigger actions for deposit"
             sequence: !input actions_in
@@ -164,13 +154,24 @@ action:
       - alias: "Mail collected"
         parallel:
           - alias: "Trigger notification for collection"
-            service: "{{ notifyService }}"
-            data:
-              message: "Mail was picked up 📭"
-              title: "📬 Mailbox alert"
-              {% if notifyService == "notify.notify" and notifyTarget != "" %}
-              target: "{{ notifyTarget }}"
-              {% endif %}
+            choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ notifyService == 'notify.notify' and notifyTarget != '' }}"
+                sequence:
+                  - service: notify.notify
+                    data:
+                      message: "Mail was picked up 📭"
+                      title: "📬 Mailbox alert"
+                      target: "{{ notifyTarget }}"
+              - conditions:
+                  - condition: template
+                    value_template: "{{ notifyService != 'notify.notify' }}"
+                sequence:
+                  - service: "{{ notifyService }}"
+                    data:
+                      message: "Mail was picked up 📭"
+                      title: "📬 Mailbox alert"
 
           - alias: "Trigger actions for collection"
             sequence: !input actions_out
